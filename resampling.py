@@ -28,6 +28,7 @@ class Res():
         self.var=(1/(len(X)-X.shape[1]-1))*sum(self.resid**2)
         self.y_pred = results.fittedvalues
         self.std_beta =  results.bse
+        self.p_value=results.pvalues
         
     # Intervalle de confiance basique 
     def IC_base(self,beta_hat,beta):
@@ -112,9 +113,6 @@ class Res():
     # Elle retourne les nouvelles estimations de Beta ainsi que les résidus associés
     # ETAPE 1
     def Estim_H0(self,k):
-        list_y_sample=list()
-        Beta_ES=list()
-        res_ES=list()
         if self.method=="linear":
             X=np.delete(self.X,k,axis=1).copy()
             model=st.families.Gaussian()
@@ -137,7 +135,9 @@ class Res():
         n=X.shape[0]
         p=X.shape[1]-1
         norm_h0=np.linalg.norm(Y-np.dot(X_sub,gamma))**2
-        norm_h1=np.linalg.norm(Y-np.dot(X,beta))**2      
+        #print("erreur quadra H0",norm_h0)
+        norm_h1=np.linalg.norm(Y-np.dot(X,beta))**2   
+        #print("erreur quadra modele de base",norm_h1)
         return( (n-p)*(norm_h0-norm_h1)/norm_h1 )
     
     def p_value(self,F_stat,F_obs):
@@ -151,29 +151,33 @@ class Res():
         for b in range(self.B):
             ind=npr.randint(0,len(Residus),len(Residus))
             #ETAPE 3: calcul des Beta et variances avec une regression linéaire sur l'échantillon bootstrapé
-            var_H0=(1/(len(X_H0)-X_H0.shape[1]-1))*np.sum(Residus**2)
+            var_H0=(1/(len(X_H0)-X_H0.shape[1]-1))*np.sum(Residus[ind]**2)
             y_hat=np.zeros(len(X_H0))
+            m=0
             for i in ind:
                 if self.method == "linear":
-                    y_hat[i] = np.dot(X_H0[i,:],gamma) + var_H0*Residus[i]
+                    y_hat[m] = np.dot(X_H0[i,:],gamma) + np.sqrt(var_H0)*Residus[i]
                 if self.method == "logistic":
                     pi_logreg = np.exp( np.dot(X_H0[i,:],gamma) )
                     cutoff = pi_logreg / ( 1 + pi_logreg ) + np.sqrt(pi_logreg*(1-pi_logreg))*Residus[i]
-                    y_hat[i] = 1 if cutoff > 0.5 else 0
+                    y_hat[m] = 1 if cutoff > 0.5 else 0
+                m=m+1
             if self.method == "linear":
                 model_sample =st.GLM(y_hat,X_H0,st.families.Gaussian())
             if self.method == "logistic":
                 model_sample =st.GLM(y_hat,X_H0,st.families.Binomial())
             res_sample = model_sample.fit()
             beta_sample = res_sample.params
+            pvalue = res_sample.pvalues[k]
+            test_ES.append(pvalue)
             #ETAPE 4: sauvegarde dans une liste les beta's et erreurs estimés
-            X_sub=X_H0[ ind,: ]
-            X = self.X[ind,:]
-            Y_sub=self.y[ind]
-            if self.method == "linear":
-                test_ES.append( self.Fisher(X,X_sub,Y_sub,beta_sample,self.beta) )
-            if self.method == "logistic":
-                test_ES.append( -2*( res_sample.llf - vrais ) )
+            X_sub=X_H0#[ ind,: ]
+            X = self.X#[ind,:]
+            Y_sub=self.y#[ind]
+            #if self.method == "linear":
+            #    test_ES.append( self.Fisher(X,X_sub,Y_sub,beta_sample,self.beta) )
+            #if self.method == "logistic":
+            #    test_ES.append( -2*( res_sample.llf - vrais ) )
         return test_ES
           
     def bootstrap_H0_CS(self,k):
@@ -194,10 +198,12 @@ class Res():
             X_sub=X_H0[ ind,: ]
             X = self.X[ind,:]
             Y_sub=self.y[ind]
-            if self.method == "linear":
-                test_ES.append( self.Fisher(X,X_sub,Y_sub,beta_sample,self.beta) )
-            if self.method == "logistic":
-                test_ES.append( -2*( res_sample.llf - vrais ) )
+            pvalue = res_sample.pvalues[k]
+            test_ES.append(pvalue)
+            #if self.method == "linear":
+            #    test_ES.append( self.Fisher(X,X_sub,Y_sub,beta_sample,self.beta) )
+            #if self.method == "logistic":
+            #    test_ES.append( -2*( res_sample.llf - vrais ) )
         return test_ES
         
         
