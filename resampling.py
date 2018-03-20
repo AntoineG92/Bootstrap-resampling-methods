@@ -28,7 +28,6 @@ class Res():
         self.var=(1/(len(X)-X.shape[1]-1))*sum(self.resid**2)
         self.y_pred = results.fittedvalues
         self.std_beta =  results.bse
-        self.p_value=results.pvalues
         
     # Intervalle de confiance basique 
     def IC_base(self,beta_hat,beta):
@@ -65,6 +64,7 @@ class Res():
     
     def case_sampling(self):
         beta_boot=[]
+        sd_hat=np.zeros(self.B)
         for b in range(self.B):
             ind= npr.randint(0,len(self.X),len(self.X))
             sample_X=self.X[ind,:]
@@ -75,8 +75,10 @@ class Res():
                 model_sample = st.GLM(sample_Y,sample_X,st.families.Binomial())
             res_sample = model_sample.fit()
             beta_sample = res_sample.params
-            beta_boot.append(beta_sample) 
-        return(beta_boot)
+            beta_boot.append(beta_sample)
+            sd_hat[b]=np.std(self.X[ind,:]/np.sqrt(np.var(self.X[ind,:])/np.mean(self.y[ind])**2+
+                                    self.X[ind,:]*np.var(self.y[ind])/np.mean(self.y[ind])**4) )
+        return(beta_boot,sd_hat)
     
     
     def errors_sampling(self):
@@ -106,17 +108,23 @@ class Res():
             sd_sample=np.std(resid_sample)
             beta_boot.append(beta_sample) 
             res_boot.append(sd_sample)
+            
         return(beta_boot)
     
     # Cette fonction permet de réaliser une régression linéaire ou logistique sur l'un des deux datasets (variable choice)
     # En ayant préalablement retiré la colonne d'indice k (dans le but de faire un test de nullité)
     # Elle retourne les nouvelles estimations de Beta ainsi que les résidus associés
     # ETAPE 1
-    def Estim_H0(self,k):
+    def Estim_H0(self,k,hyp):
+        y= self.y.copy()
+        if hyp != 0:
+            for i in range(len(y)):
+                y[i]=y[i]-hyp*self.X[i,k]
+        
         if self.method=="linear":
             X=np.delete(self.X,k,axis=1).copy()
             model=st.families.Gaussian()
-            Reg = st.GLM(self.y,X,model)
+            Reg = st.GLM(y,X,model)
             results = Reg.fit()
             Beta=results.params
             resid=results.resid_deviance
@@ -124,17 +132,17 @@ class Res():
         if self.method=="logistic":
             X=np.delete(self.X,k,axis=1).copy()
             model=st.families.Binomial()
-            Reg = st.GLM(self.y,X,model)
+            Reg = st.GLM(y,X,model)
             results = Reg.fit()
             Beta=results.params
             resid=results.resid_pearson
             vraise=results.llf
-        return(Beta,resid,X,vraise)
+        return(Beta,resid,X,vraise,y)
     
-    def Fisher(self,X,X_sub,Y,gamma,beta):
+    def Fisher(self,X,X_sub,Y,y_prime,gamma,beta):
         n=X.shape[0]
         p=X.shape[1]-1
-        norm_h0=np.linalg.norm(Y-np.dot(X_sub,gamma))**2
+        norm_h0=np.linalg.norm(y_prime-np.dot(X_sub,gamma))**2
         #print("erreur quadra H0",norm_h0)
         norm_h1=np.linalg.norm(Y-np.dot(X,beta))**2   
         #print("erreur quadra modele de base",norm_h1)
@@ -143,15 +151,26 @@ class Res():
     def p_value(self,F_stat,F_obs):
         return( np.sum( [1 for b in range(len(F_stat)) if F_stat[b] > F_obs] )/len(F_stat) )
     
-    def bootstrap_H0_ES(self,k):
+    def p_value_boot(self,S_bar,S_b):
+        card = len([b for b in range(self.B) if S_b[b]>S_bar])
+        return ( card + 1 )/(self.B+1)
+    
+    def S_bar(self,k,hyp):
+        sd_hat=np.std( self.X[:,k]/np.sqrt(np.var(self.X[:,k])/np.mean(self.y)**2+
+                                    self.X[:,k]*np.var(self.y)/np.mean(self.y)**4) )
+        return( abs( np.sqrt(len(self.X))*(self.beta[k]-hyp)/sd_hat ) )
+    
+    def bootstrap_H0_ES(self,k,hyp):
         #ETAPE 1: estime les paramètres et erreurs sous H0
-        gamma,Residus,X_H0,vrais = self.Estim_H0(k)
+        gamma,Residus,X_H0,vrais,y_prime = self.Estim_H0(k,hyp)
+        var_H0=(1/(len(X_H0)-X_H0.shape[1]-1))*np.sum(Residus**2)
         #ETAPE 2: échantillonne aléatoirement les résidus
         test_ES=[]
+        y_hat_list=[]
+        ind_list=[]
         for b in range(self.B):
             ind=npr.randint(0,len(Residus),len(Residus))
             #ETAPE 3: calcul des Beta et variances avec une regression linéaire sur l'échantillon bootstrapé
-            var_H0=(1/(len(X_H0)-X_H0.shape[1]-1))*np.sum(Residus[ind]**2)
             y_hat=np.zeros(len(X_H0))
             m=0
             for i in ind:
@@ -162,48 +181,62 @@ class Res():
                     cutoff = pi_logreg / ( 1 + pi_logreg ) + np.sqrt(pi_logreg*(1-pi_logreg))*Residus[i]
                     y_hat[m] = 1 if cutoff > 0.5 else 0
                 m=m+1
+            y_hat_list.append(y_hat)
+            ind_list.append(ind)
             if self.method == "linear":
-                model_sample =st.GLM(y_hat,X_H0,st.families.Gaussian())
+                model_sample =st.GLM(y_hat,X_H0[ind,:],st.families.Gaussian())
             if self.method == "logistic":
-                model_sample =st.GLM(y_hat,X_H0,st.families.Binomial())
+                model_sample =st.GLM(y_hat,X_H0[ind,:],st.families.Binomial())
             res_sample = model_sample.fit()
             beta_sample = res_sample.params
-            pvalue = res_sample.pvalues[k]
-            test_ES.append(pvalue)
             #ETAPE 4: sauvegarde dans une liste les beta's et erreurs estimés
-            X_sub=X_H0#[ ind,: ]
-            X = self.X#[ind,:]
-            Y_sub=self.y#[ind]
-            #if self.method == "linear":
-            #    test_ES.append( self.Fisher(X,X_sub,Y_sub,beta_sample,self.beta) )
-            #if self.method == "logistic":
-            #    test_ES.append( -2*( res_sample.llf - vrais ) )
-        return test_ES
+            X_sub=X_H0.copy()#[ ind,: ]
+            X = self.X.copy()#[ind,:]
+            Y_sub=self.y.copy()#[ind]
+            if self.method == "linear":
+                test_ES.append( self.Fisher(X,X_sub,Y_sub,y_prime,beta_sample,self.beta) )
+            if self.method == "logistic":
+                test_ES.append( -2*( res_sample.llf - vrais ) )
+        return test_ES, y_hat_list, ind_list
           
-    def bootstrap_H0_CS(self,k):
+    def bootstrap_H0_CS_newmethod(self,k,hyp):
+        S_b=np.zeros(self.B)
+        #calcule gamma sous H0
+        gamma = self.Estim_H0(k,hyp)[0]
+        #calcule les beta bootstrapés
+        beta_boot = self.case_sampling()[0]
+        #calcule S_b
+        sd_hat = self.case_sampling()[1]
+        for b in range(self.B):
+            S_b[b] = abs( np.sqrt(len(self.X))*(beta_boot[b][k] - self.beta[k])/sd_hat[b] )
+        #calcule S_bar
+        S_bar = self.S_bar(k,hyp)
+        return(S_b,S_bar)
+    
+    def bootstrap_H0_CS(self,k,hyp):
+        S_b = np.zeros(self.B)
         #ETAPE 1: estime les paramètres et erreurs sous H0
-        gamma,Residus,X_H0,vrais = self.Estim_H0(k)
+        gamma,Residus,X_H0,vrais,y_prime = self.Estim_H0(k,hyp)
         #ETAPE 2: échantillonne aléatoirement les résidus
         test_ES=[]
         for b in range(self.B):
             ind=npr.randint(0,len(Residus),len(Residus))
             #ETAPE 3: calcul des Beta et variances avec une regression linéaire sur l'échantillon bootstrapé
             if self.method == "linear":
-                model_sample =st.GLM(self.y[ind],X_H0[ind,:],st.families.Gaussian())
+                model_sample =st.GLM(y_prime[ind],X_H0[ind,:],st.families.Gaussian())
             if self.method == "logistic":
-                model_sample =st.GLM(self.y[ind],X_H0[ind,:],st.families.Binomial())
+                model_sample =st.GLM(y_prime[ind],X_H0[ind,:],st.families.Binomial())
             res_sample = model_sample.fit()
             beta_sample = res_sample.params
             #ETAPE 4: sauvegarde dans une liste les beta's et erreurs estimés
-            X_sub=X_H0[ ind,: ]
-            X = self.X[ind,:]
-            Y_sub=self.y[ind]
-            pvalue = res_sample.pvalues[k]
-            test_ES.append(pvalue)
-            #if self.method == "linear":
-            #    test_ES.append( self.Fisher(X,X_sub,Y_sub,beta_sample,self.beta) )
-            #if self.method == "logistic":
-            #    test_ES.append( -2*( res_sample.llf - vrais ) )
+            X_sub=X_H0.copy()#[ ind,: ]
+            X = self.X.copy()#[ind,:]
+            Y_sub=self.y.copy()#[ind]
+            if self.method == "linear":
+                test_ES.append( self.Fisher(X,X_sub,Y_sub,y_prime,beta_sample,self.beta) )
+            if self.method == "logistic":
+                test_ES.append( -2*( res_sample.llf - vrais ) )
         return test_ES
+
         
         
