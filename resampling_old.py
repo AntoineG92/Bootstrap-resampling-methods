@@ -139,10 +139,10 @@ class Res():
             vraise=results.llf
         return(Beta,resid,X,vraise,y)
     
-    def Fisher(self,X,X_sub,Y,gamma,beta):
+    def Fisher(self,X,X_sub,Y,y_prime,gamma,beta):
         n=X.shape[0]
         p=X.shape[1]-1
-        norm_h0=np.linalg.norm(Y-np.dot(X_sub,gamma))**2
+        norm_h0=np.linalg.norm(y_prime-np.dot(X_sub,gamma))**2
         #print("erreur quadra H0",norm_h0)
         norm_h1=np.linalg.norm(Y-np.dot(X,beta))**2   
         #print("erreur quadra modele de base",norm_h1)
@@ -182,19 +182,22 @@ class Res():
                     y_hat[m] = 1 if cutoff > 0.5 else 0
                 m=m+1
             y_hat_list.append(y_hat)
-            #ind_list.append(ind)
-            #if self.method == "linear":
-            #    model_sample =st.GLM(y_hat,X_H0[ind,:],st.families.Gaussian())
+            ind_list.append(ind)
+            if self.method == "linear":
+                model_sample =st.GLM(y_hat,X_H0[ind,:],st.families.Gaussian())
             if self.method == "logistic":
                 model_sample =st.GLM(y_hat,X_H0[ind,:],st.families.Binomial())
-                res_sample = model_sample.fit()
-                beta_sample = res_sample.params
+            res_sample = model_sample.fit()
+            beta_sample = res_sample.params
             #ETAPE 4: sauvegarde dans une liste les beta's et erreurs estimés
+            X_sub=X_H0.copy()#[ ind,: ]
+            X = self.X.copy()#[ind,:]
+            Y_sub=self.y.copy()#[ind]
             if self.method == "linear":
-                test_ES.append( self.Fisher(self.X,X_H0,y_hat,gamma,self.beta) )
+                test_ES.append( self.Fisher(X,X_sub,Y_sub,y_prime,beta_sample,self.beta) )
             if self.method == "logistic":
                 test_ES.append( -2*( res_sample.llf - vrais ) )
-        return test_ES
+        return test_ES, y_hat_list, ind_list
           
     def bootstrap_H0_CS_newmethod(self,k,hyp):
         S_b=np.zeros(self.B)
